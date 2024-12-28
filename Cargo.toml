@@ -1,0 +1,13 @@
+[package]
+name = "tk-auth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+argon2 = "0.5.3"
+axum = "0.7.9"
+base64 = "0.22.1"
+ring = "0.17.8"
+serde = { version = "1.0.217", features = [ "serde_derive" ] }
+tokio = { version = "1.42.0", features = [ "full" ] }
+tokio-rustls = "0.26.1"
