@@ -10,6 +10,7 @@ use serde;
 use tokio;
 use tokio::sync::RwLock as TokioRwLock;
 
+#[derive(serde::Serialize)]
 struct Session {
     user: Option<String>,
     description: String,
@@ -57,7 +58,7 @@ struct NewSessionResponse {
     id_base64: String,
 }
 
-async fn new_session(
+async fn post_new_session(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<NewSessionResponse> {
     let session_id = SessionId {
@@ -86,10 +87,11 @@ async fn new_session(
 #[derive(serde::Deserialize)]
 struct AuthenticateForm {
     session_id: String,
+    user: String,
     password: String,
 }
 
-async fn authenticate(
+async fn post_authenticate(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     axum::extract::Form(form): axum::extract::Form<AuthenticateForm>,
 ) -> axum::response::Response {
@@ -111,20 +113,83 @@ async fn authenticate(
             .and_then(|x| Some(x.clone()))
     };
     match session {
-        Some(session) => axum::response::Response::builder()
-            .status(200)
-            .header("Content-Type", "application/json")
-            .body(axum::body::Body::new(format!(
-                "{{\"success\":\"session {} authenticated succesfully\"}}",
-                form.session_id
-            )))
-            .unwrap(),
+        Some(session) => {
+            let mut session_locked = session.write().await;
+            if session_locked.authenticated {
+                axum::response::Response::builder()
+                    .status(400)
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::new(format!(
+                        "{{\"error\":\"session {} already authenticated\"}}",
+                        form.session_id
+                    )))
+                    .unwrap()
+            } else {
+                session_locked.authenticated = true;
+                session_locked.user = Some(form.user);
+                axum::response::Response::builder()
+                    .status(200)
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::new(format!(
+                        "{{\"success\":\"session {} authenticated succesfully\"}}",
+                        form.session_id
+                    )))
+                    .unwrap()
+            }
+        }
         None => axum::response::Response::builder()
             .status(400)
             .header("Content-Type", "application/json")
             .body(axum::body::Body::new(format!(
                 "{{\"error\":\"session {} doesn't exist\"}}",
                 form.session_id
+            )))
+            .unwrap(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct GetSessionQuery {
+    session_id: String,
+}
+
+async fn get_session_state(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<GetSessionQuery>,
+) -> axum::response::Response {
+    let session_id: Result<SessionId, ()> = query.session_id.as_str().try_into();
+    if let Err(_) = session_id {
+        return axum::response::Response::builder()
+            .status(400)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::new(String::from(
+                "{\"error\":\"malformed session id\"}",
+            )))
+            .unwrap();
+    }
+    let session_id = session_id.unwrap();
+    let session = {
+        state
+            .sessions
+            .read()
+            .await
+            .get(&session_id)
+            .and_then(|x| Some(x.clone()))
+    };
+    match session {
+        Some(session) => axum::response::Response::builder()
+            .status(200)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::new(
+                serde_json::to_string(&(*session.read().await)).unwrap(),
+            ))
+            .unwrap(),
+        None => axum::response::Response::builder()
+            .status(400)
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::new(format!(
+                "{{\"error\":\"session {} doesn't exist\"}}",
+                query.session_id
             )))
             .unwrap(),
     }
@@ -138,11 +203,15 @@ async fn main() -> io::Result<()> {
     let app = axum::Router::new()
         .route(
             "/api/new_session",
-            axum::routing::post(new_session).with_state(app_state.clone()),
+            axum::routing::post(post_new_session).with_state(app_state.clone()),
         )
         .route(
             "/api/authenticate",
-            axum::routing::post(authenticate).with_state(app_state.clone()),
+            axum::routing::post(post_authenticate).with_state(app_state.clone()),
+        )
+        .route(
+            "/api/session_state",
+            axum::routing::get(get_session_state).with_state(app_state.clone()),
         )
         .with_state(app_state);
 
