@@ -5,10 +5,12 @@ use std::sync::Arc;
 use axum;
 use base64;
 use base64::Engine;
+use http;
 use ring;
 use serde;
 use tokio;
 use tokio::sync::RwLock as TokioRwLock;
+use tower_http;
 
 #[derive(serde::Serialize)]
 struct Session {
@@ -212,6 +214,11 @@ async fn main() -> io::Result<()> {
         .route(
             "/api/session_state",
             axum::routing::get(get_session_state).with_state(app_state.clone()),
+        )
+        .nest_service("/web", tower_http::services::ServeDir::new("web/build"))
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_methods([http::Method::GET, http::Method::POST]),
         )
         .with_state(app_state);
 
